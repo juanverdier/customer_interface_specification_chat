@@ -1,0 +1,21 @@
+# Ignore environment variables and secrets
+.env
+
+# Ignore compiled Python files
+__pycache__/
+*.pyc
+*.pyo
+*.log
+
+# Ignore dataset and embeddings
+Embeddings JSON/
+
+# Ignore system files
+.DS_Store
+Thumbs.db
+
+# Ignore Docker-related build files
+.dockerignore
+
+# Ignore virtual environment (if applicable)
+venv/
