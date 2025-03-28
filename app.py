@@ -6,6 +6,7 @@ from utils.query_processing import improve_query
 from utils.reranker import rerank_with_cohere
 from utils.generator import generate_response
 from utils.helpers import score_response_async
+import re
 
 # -------------------- Environment Setup -------------------- #
 
@@ -35,78 +36,114 @@ with st.sidebar:
     st.markdown("---")
 
     st.markdown("⚠️ **Nota:** Este chat responde una consulta a la vez, ya que está en fase de prueba. "
-                "El objetivo es centrarse en la precisión de cada respuesta y en el feedback recibido. "
-                "**Importante: Hasta no enviar el feedback, no permite realizar una nueva consulta**")
+                "El objetivo es centrarse en la precisión de cada respuesta. "
+                "**Importante: Hasta no enviar la nueva consulta, no permite realizar otra**")
 
     st.markdown("---")
 
     st.markdown("🆔 **ID Consulta:** Cada interacción (consulta-respuesta) tiene un identificador único. "
-                "Si aparte de enviar el feedback a través de esta pantalla se quieren hacer comentarios adicionales, "
+                "Si aparte de esta pantalla se quieren hacer comentarios adicionales, "
                 "favor de hacer referencia a este indicador.")
 
 # Main UI
 st.title("🔍 Customer Interface Specification")
-st.markdown("📄💬 **Enter your query below to get information from the document:**")
 
-# User Query Input
-query_input = st.text_input("Escribe tu consulta:", placeholder="Ej: 'Cual es la tabla de atributos del DE 1?'")
+# Session state defaults
+if "query_input" not in st.session_state:
+    st.session_state.query_input = ""
 
-CONFIDENCE_THRESHOLD = 0.65  # Adjust based on rerank score distribution
-
-# Store response in session state to avoid unnecessary reprocessing
 if "generated_response" not in st.session_state:
     st.session_state.generated_response = None
+
 if "trace_id_code" not in st.session_state:
     st.session_state.trace_id_code = None
 
-if query_input and st.session_state.generated_response is None:
+if "final_context" not in st.session_state:
+    st.session_state.final_context = ""
+
+# Input field (bound to session state)
+st.session_state.query_input = st.text_input(
+    "Escribe tu consulta:",
+    placeholder="Ej: 'Cual es la tabla de atributos del DE 1?'",
+    value=st.session_state.query_input
+)
+
+CONFIDENCE_THRESHOLD = 0.60
+
+# Query processing
+if st.session_state.query_input and st.session_state.generated_response is None:
     with st.spinner("🔄 Procesando tu consulta... Por favor esperar."):
 
-        # Improve query
-        improved_query = improve_query(query_input)
+        improved_query = improve_query(st.session_state.query_input)
 
-        # Retrieve relevant chunks
-        initial_results = retrieve(improved_query)
+        context = []
+        for item in improved_query:
 
-        # Rerank results with Cohere
-        reranked_results = rerank_with_cohere(improved_query, initial_results)
+            reference = item['reference']
+            match = re.search(r'->\s*(.*)', reference)
+            if match:
+                reference_clean = match.group(1)
+            else:
+                reference_clean = reference
 
-        # Filter based on confidence threshold
-        filtered_results = [
-            (chunk_id, conf) for chunk_id, conf, _ in reranked_results if conf >= CONFIDENCE_THRESHOLD
+            initial_results = retrieve(reference_clean, top_k=20)
+
+            reranked_results = rerank_with_cohere(reference_clean, initial_results)
+
+            for chunk_id, confidence, header, data in reranked_results:
+                if confidence >= CONFIDENCE_THRESHOLD:
+                    context.append(data.get("content", ""))
+        
+
+
+        st.session_state.final_context = "\n\n".join(context)
+        response, trace_id_code = generate_response(st.session_state.final_context, st.session_state.query_input)
+
+        st.session_state.generated_response = response
+        st.session_state.trace_id_code = trace_id_code
+
+# Display response
+if st.session_state.generated_response is not None:
+    st.write("### Respuesta generada:")
+
+    if st.session_state.final_context:
+        st.write(f"ID Consulta: {st.session_state.trace_id_code}")
+        st.markdown(st.session_state.generated_response)
+    else:
+        st.write(f"ID Consulta: {st.session_state.trace_id_code}")
+        st.warning("⚠️ No se encontró información relevante para responder a la consulta.")
+
+    # Feedback section
+    st.markdown("**Dar Feedback**")
+
+    if "feedback_score" not in st.session_state:
+        st.session_state.feedback_score = "🙂 3"
+
+    st.session_state.feedback_score = st.radio(
+        "¿Qué tan acertada fue esta respuesta?",
+        ["😞 1", "😐 2", "🙂 3", "😀 4", "🚀 5"],
+        index=2,
+        horizontal=True
+    )
+
+    if st.button("Enviar Feedback"):
+        score_response_async(
+            trace_id=st.session_state.trace_id_code,
+            feedback=st.session_state.feedback_score
+        )
+
+        # Clear state and rerun app
+        keys_to_clear = [
+            "query_input",
+            "generated_response",
+            "trace_id_code",
+            "final_context",
+            "feedback_score"
         ]
+        for key in keys_to_clear:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.success("✅ Feedback enviado. ¡Gracias!")
+        st.rerun()
 
-        # ✅ Corrected: Retrieve content from already loaded embeddings_store
-        context = "\n\n".join([embeddings_store[chunk_id]["content"] for chunk_id, _ in filtered_results]) if filtered_results else ""
 
-        # Generate response or inform no relevant info found
-        if context:
-            response, trace_id_code = generate_response(context, improved_query)
-        else:
-            response = "⚠️ **No se ha encontrado información relevante.** Por favor reformula tu pregunta."
-            trace_id_code = None
-            st.session_state.generated_response = None  
-
-        # Store response in session state
-        if response != "⚠️ **No se ha encontrado información relevante.** Por favor reformula tu pregunta.":
-            st.session_state.generated_response = response
-            st.session_state.trace_id_code = trace_id_code
-
-# Display Response
-if st.session_state.trace_id_code is not None:
-    st.write(f"**ID consulta:** {st.session_state.trace_id_code}")
-    st.markdown(st.session_state.generated_response)
-
-    # Feedback Section (Only if an answer was generated)
-    if st.session_state.trace_id_code is not None:
-        st.markdown("**Dar Feedback**")
-        feedback = st.radio("Qué tan acertada fue esta respuesta?", 
-                            ["😞 1", "😐 2", "🙂 3", "😀 4", "🚀 5"], index=2, horizontal=True)
-
-        if st.button("Enviar Feedback"):
-            score_response_async(st.session_state.trace_id_code, feedback)  # Run in background
-            st.success("Gracias por el feedback!")
-
-            # Clear response and trace ID after feedback is submitted
-            st.session_state.generated_response = None
-            st.session_state.trace_id_code = None

@@ -8,9 +8,10 @@ def generate_response(context, query):
     response = client.chat.completions.create(
         model="o3-mini",  # Ensure the correct OpenAI model is used
         messages=[
-            {"role": "system", "content": "You should always reply in spanish. You are an AI assistant that provides helpful responses based on retrieved documents. If the answer needs to include a table, please format your answer as a Markdown table, using a header row, separator row, and separate rows for each field. Do not specify details about the chunks used to answer."},
+            {"role": "system", "content": "You should always reply in spanish. You are an AI assistant that provides helpful responses based on retrieved documents. Ignore any previous knowledge, just stick to the context given. If the answer needs to include a table, please format your answer as a Markdown table, using a header row, separator row, and separate rows for each field. Do not specify details about the chunks used to answer."},
             {"role": "user", "content": f"Context: {context}\n\nQuery: {query}"}
         ],
+
         trace_id=trace_id  # Pass the generated trace ID
     )
     

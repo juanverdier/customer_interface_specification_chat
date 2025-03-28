@@ -24,7 +24,6 @@ def score_response_async(trace_id, feedback):
     """Run feedback submission in a background thread to avoid blocking UI."""
     def _submit_score():
         langfuse.score(
-            id=trace_id,
             trace_id=trace_id,
             name="correctness",
             value=feedback
